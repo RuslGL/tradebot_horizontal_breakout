@@ -4,7 +4,7 @@ import json
 import traceback
 
 
-class SocketBybit():
+class SocketBybit:
 
     def __init__(self, url, params=None, on_message=None):
         self.url = url
