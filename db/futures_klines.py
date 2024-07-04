@@ -18,7 +18,6 @@ class FutureKlines(Base):
     __tablename__ = 'future_klines'
     symbol = Column(String, primary_key=True, nullable=False)
     start = Column(BigInteger, nullable=False)  # Timestamp as start time
-    interval = Column(String, nullable=False)
     open = Column(Float, nullable=False)
     close = Column(Float, nullable=False)
     high = Column(Float, nullable=False)
@@ -53,13 +52,12 @@ class FutureKlinesOperations:
         else:
             print(f"Table '{FutureKlines.__tablename__}' already exists, skipping creation.")
 
-    async def upsert_kline(self, start, symbol, interval, open, close, high, low, volume):
+    async def upsert_kline(self, start, symbol, open, close, high, low, volume):
         async with self.async_session() as session:
             async with session.begin():
                 stmt = insert(FutureKlines).values(
                     start=start,
                     symbol=symbol,
-                    interval=interval,
                     open=open,
                     close=close,
                     high=high,
@@ -69,7 +67,6 @@ class FutureKlinesOperations:
                     index_elements=['symbol'],
                     set_={
                         'start': start,
-                        'interval': interval,
                         'open': open,
                         'close': close,
                         'high': high,
@@ -88,7 +85,7 @@ class FutureKlinesOperations:
 
             # Создаем DataFrame из списка объектов FutureKlines
             df = pd.DataFrame([
-                {'start': kline.start, 'symbol': kline.symbol, 'interval': kline.interval,
+                {'start': kline.start, 'symbol': kline.symbol,
                  'open': kline.open, 'close': kline.close, 'high': kline.high,
                  'low': kline.low, 'volume': kline.volume}
                 for kline in klines
@@ -113,7 +110,7 @@ class FutureKlinesOperations:
 
                 # Создаем DataFrame из списка объектов FutureKlines
                 df = pd.DataFrame([
-                    {'start': kline.start, 'symbol': kline.symbol, 'interval': kline.interval,
+                    {'start': kline.start, 'symbol': kline.symbol,
                      'open': kline.open, 'close': kline.close, 'high': kline.high,
                      'low': kline.low, 'volume': kline.volume}
                     for kline in klines
@@ -125,34 +122,6 @@ class FutureKlinesOperations:
 
                 return df
 
-    # Надо тестить
-    # async def select_and_delete_all_klines(self):
-    #     async with self.async_session() as session:
-    #         async with session.begin():
-    #             # Выборка всех записей
-    #             result = await session.execute(select(FutureKlines))
-    #             klines = result.scalars().all()
-    #
-    #             # Создаем DataFrame из списка объектов FutureKlines
-    #             df = pd.DataFrame([
-    #                 {'start': kline.start, 'symbol': kline.symbol, 'interval': kline.interval,
-    #                  'open': kline.open, 'close': kline.close, 'high': kline.high,
-    #                  'low': kline.low, 'volume': kline.volume}
-    #                 for kline in klines
-    #             ])
-    #
-    #             # Удаление только извлеченных записей по связке символ и старт
-    #             conditions_to_delete = [(kline.symbol, kline.start) for kline in klines]
-    #             for symbol, start in conditions_to_delete:
-    #                 await session.execute(
-    #                     delete(FutureKlines).where(
-    #                         FutureKlines.symbol == symbol,
-    #                         FutureKlines.start == start
-    #                     )
-    #                 )
-    #             await session.commit()
-    #
-    #             return df
 
 
 if __name__ == '__main__':
@@ -161,7 +130,7 @@ if __name__ == '__main__':
         db_futures = FutureKlinesOperations()
         await db_futures.create_table()
 
-        await db_futures.upsert_kline(1625438400, 'BTCU', '10', 35000.0, 35500.0, 36000.0, 34500.0, 1000.0)
+        await db_futures.upsert_kline(1625438400, 'BTCU', 35000.0, 35500.0, 36000.0, 34500.0, 1000.0)
 
         df_klines = await db_futures.select_klines()
         print(df_klines)
