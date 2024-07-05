@@ -18,13 +18,18 @@ class SocketBybit:
                 async with aiohttp.ClientSession() as session:
                     async with session.ws_connect(self.url) as ws:
                         await self.on_open(ws)
+                        heartbeat_task = asyncio.create_task(self.send_heartbeat(ws))
                         while True:
                             try:
                                 message = await ws.receive()
-                                await self.on_message(ws, message)
+                                if message.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                                    raise ConnectionError("WebSocket connection closed or error occurred")
+                                elif message.type == aiohttp.WSMsgType.TEXT:
+                                    await self.on_message(ws, message)
                             except Exception as e:
                                 await self.on_error(ws, e)
-                                break
+                                await asyncio.sleep(5)
+                                break  # Exit the inner loop to reconnect
             except Exception as e:
                 print(f"Connection failed: {e}")
                 await asyncio.sleep(1)  # Wait before attempting to reconnect
@@ -33,10 +38,10 @@ class SocketBybit:
         while True:
             try:
                 await ws.send_json({"req_id": "100001", "op": "ping"})
-                await asyncio.sleep(20)  # Пауза между пингами
+                await asyncio.sleep(20)  # Pause between pings
             except Exception as e:
                 await self.on_error(ws, e)
-                break
+                break  # Exit the loop to stop sending pings
 
     async def on_open(self, ws):
         print(ws, 'Websocket was opened')

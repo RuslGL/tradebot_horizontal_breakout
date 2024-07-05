@@ -9,6 +9,12 @@ import time
 
 import aiohttp
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
+API_KEY = str(os.getenv('test_01_bybit_api_key'))
+SECRET_KEY = str(os.getenv('test_01_bybit_secret_key'))
 
 MAIN_URL = 'https://api-testnet.bybit.com'
 
@@ -140,6 +146,31 @@ async def get_lin_perp_info_asc():
 
     return len(futures_list), futures_list, short_params
 
+
+# ASYNCIO TRADE REQUESTS
+
+
+
+async def main():
+    RISK_LIMIT = 0.8
+    TP_RATE = 0.01
+
+    START_BUDGET = 8
+    USDT_BUDGET = 8
+    TOTAL_BUDGET = 8
+
+    symbol = 'BTCUSDT'
+    quantity = 0.003
+
+    #await post_bybit_signed(endpoint, API_KEY, SECRET_KEY, **kwargs)
+    await post_bybit_signed('place_order', API_KEY, SECRET_KEY, orderType='Limit',
+                            category='linear', symbol=symbol,
+                            side='Buy', qty=quantity)
+
+
+
+if __name__ == '__main__':
+    asyncio.run(main())
 
 # SERVICE FUNCTIONS
 

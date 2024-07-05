@@ -2,7 +2,7 @@ import asyncio
 import plotly.graph_objects as go
 
 from utils import klines_to_df
-from api import get_klines_asc
+from api_ws_and_market import get_klines_asc
 import time
 
 
