@@ -58,8 +58,6 @@ class SocketBybit:
         print(traceback.format_exc())
 
     async def on_message(self, ws, msg):
-        pass
-        #print('on_message', ws, msg.data)
         data = json.loads(msg.data)
         print(data)
         # await asyncio.sleep(20)

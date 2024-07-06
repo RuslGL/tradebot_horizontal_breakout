@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.dialects.postgresql import insert
 import json
+from sqlalchemy.exc import SQLAlchemyError
 
 load_dotenv()
 DATABASE_URL = str(os.getenv('database_url'))
@@ -44,7 +45,6 @@ class SettingsVarsOperations:
         else:
             print(f"Table '{SettingsVars.__tablename__}' already exists, skipping creation.")
 
-
     async def upsert_settings(self, name, value):
         async with self.async_session() as session:
             async with session.begin():
@@ -60,6 +60,30 @@ class SettingsVarsOperations:
                 await session.execute(stmt)
                 await session.commit()
 
+    async def upsert_settings_bulk(self, settings_dict):
+        async with self.async_session() as session:
+            async with session.begin():
+                try:
+                    for name, value in settings_dict.items():
+                        stmt = insert(SettingsVars).values(
+                            name=name,
+                            value=value
+                        ).on_conflict_do_update(
+                            index_elements=['name'],
+                            set_={
+                                'value': value,
+                            }
+                        )
+                        await session.execute(stmt)
+                    await session.commit()
+
+                    return True
+
+                except SQLAlchemyError as e:
+                    # Обработка ошибок SQLAlchemy, например, соединение с базой данных прервано
+                    print(f"SQLAlchemy error occurred: {e}")
+                    await session.rollback()
+                    return False
 #
     async def select_all(self):
         async with self.async_session() as session:

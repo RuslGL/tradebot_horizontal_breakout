@@ -2,12 +2,12 @@ import asyncio
 import os
 import pandas as pd
 import json
-from api_ws_and_market import get_lin_perp_info_asc, get_klines_asc
+from api.api_market import get_lin_perp_info_asc, get_klines_asc
 from utils import split_list
 from dotenv import load_dotenv
 from db.futures_klines import FutureKlinesOperations
 from db.settings_vars import SettingsVarsOperations
-from ws import SocketBybit
+from api.ws import SocketBybit
 from multiprocessing import Process
 from datetime import timezone
 import numpy as np
@@ -16,7 +16,7 @@ import time
 from datetime import datetime
 from strategy import joined_resistance_support
 
-from api_private import BybitTradeClientLinear
+from api.api_private import BybitTradeClientLinear
 
 load_dotenv()
 
@@ -91,6 +91,7 @@ def run_socket_sync(topics, url):
     loop.run_until_complete(run_socket(topics, url))
 
 
+
 async def perform_strategy(trading_pairs):
 
     print('Strategy performance started')
@@ -99,9 +100,7 @@ async def perform_strategy(trading_pairs):
 
 
     IF_TEST = True
-    MAIN_TEST = 'https://api-testnet.bybit.com'
-    MAIN_REAL = 'https://api.bybit.com'
-
+    global MAIN_TEST, MAIN_REAL
 
     if IF_TEST:
         print('THIS IS TEST ONLY')
@@ -119,12 +118,12 @@ async def perform_strategy(trading_pairs):
     WINDOW = 30
     KLINE_INTERVAL = 1 # KLINES LENGTH
     KLINE_PERIOD = 5  # to calculate sma
-    TRADE_MODE = False
+    TRADE_MODE = True
     TP_RATE = 0.02
     SL_RATE = 0.01
     RISK_LIMIT = 0.8
 
-    VOLUME_MULTIPLICATOR = 10
+    VOLUME_MULTIPLICATOR = 10 # to defane SMA * N
 
 
     # DB connectors, instances created
@@ -218,37 +217,48 @@ async def perform_strategy(trading_pairs):
                 # Проверяем условие: volume > SMA * x
                 if not np.isnan(last_row['SMA']) and last_row['SMA'] != 0:
                     if last_row['volume'] > last_row['SMA'] * VOLUME_MULTIPLICATOR:
-                        symbol_levels = (days_levels.get(symbol))
-
-                        if last_row['close'] > symbol_levels[0]:
-                            print('Signal for long received',
-                                  datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S'))
-                            print(f"{symbol}, Close: {last_row['close']}, Volume: {last_row['volume']}, Latest SMA: {last_row['SMA']}")
-                            print(symbol_levels)
-                            if TRADE_MODE:
-                                print('Open long')
-                                try:
-                                    await client.place_long(symbol)
-                                except Exception as e:
-                                    print(e)
-
-                        if last_row['close'] < symbol_levels[1]:
-                            print('Signal for short received',
-                                  datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S'))
-                            print(f"{symbol}, Close: {last_row['close']}, Volume: {last_row['volume']}, Latest SMA: {last_row['SMA']}, time: {last_row['start']}")
-                            print(symbol_levels)
-                            if TRADE_MODE:
-                                print('Open short')
-                                try:
-                                    await client.place_short(symbol)
-                                except Exception as e:
-                                    print(e)
+                        if last_row['symbol'] in new_klines_df['symbol'].values:
+                            symbol_levels = (days_levels.get(symbol))
 
 
-            # # FOR DEBUG
+                            # ###################### MAIN STRATEGY LOGIC ######################
+                                  # ###################### START ######################
+                                                # #####################
 
+                            # пробитие верхнего уровня - прошлая свеча закрылась (новая открылась) ниже верхнего уровня
+                            # а последняя свеча закрылась выше уровня, то есть произошел прокол/пробитие
+                            if last_row['close'] > symbol_levels[0] and last_row['open'] < symbol_levels[0]:
+                                print('Signal for long received',
+                                      datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S'))
+                                print(f"{symbol}, Close: {last_row['close']}, Volume: {last_row['volume']}, Latest SMA: {last_row['SMA']}")
+                                print(symbol_levels)
+                                if TRADE_MODE:
+                                    print('Open long')
+                                    try:
+                                        await client.place_long(symbol)
+                                    except Exception as e:
+                                        print(e)
+                            # пробитие нижнего уровня - прошлая свеча закрылась (новая открылась) выше нижнего уровня
+                            # а последняя свеча закрылась ниже уровня, то есть произошел прокол/пробитие
+                            if last_row['close'] < symbol_levels[1] and last_row['open'] > symbol_levels[1]:
+                                print('Signal for short received',
+                                      datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S'))
+                                print(f"{symbol}, Close: {last_row['close']}, Volume: {last_row['volume']}, Latest SMA: {last_row['SMA']}, time: {last_row['start']}")
+                                print(symbol_levels)
+                                if TRADE_MODE:
+                                    print('Open short')
+                                    try:
+                                        await client.place_short(symbol)
+                                    except Exception as e:
+                                        print(e)
+                                                # #####################
+                                  # ###################### END ######################
+                            # ###################### MAIN STRATEGY LOGIC ######################
+
+
+            # FOR DEBUG
             klines_df.to_csv('klines_join_data.csv', index=False)
-            print("Updated data loaded and saved to klines_join_data.csv")
+            # print("Updated data loaded and saved to klines_join_data.csv")
 
         await asyncio.sleep(1)  # Adjust sleep interval as needed
 
@@ -258,6 +268,7 @@ def start_perform_strategy(trading_pairs):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(perform_strategy(trading_pairs))
+
 
 
 async def main():
