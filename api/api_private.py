@@ -14,6 +14,7 @@ load_dotenv()
 class BybitTradeClientLinear:
     MAIN_TEST = 'https://api-testnet.bybit.com'
     MAIN_REAL = 'https://api.bybit.com'
+
     ENDPOINTS_BYBIT = {
         # trade
         'place_order': '/v5/order/create',

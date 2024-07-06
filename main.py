@@ -1,63 +1,28 @@
 import asyncio
 import os
-import pandas as pd
 import json
+import time
+from datetime import datetime, timezone
+from multiprocessing import Process
+
+import pandas as pd
+import numpy as np
+from dotenv import load_dotenv
+
 from api.api_market import get_lin_perp_info_asc, get_klines_asc
 from utils import split_list
-from dotenv import load_dotenv
 from db.futures_klines import FutureKlinesOperations
 from db.settings_vars import SettingsVarsOperations
 from api.ws import SocketBybit
-from multiprocessing import Process
-from datetime import timezone
-import numpy as np
-
-import time
-from datetime import datetime
 from strategy import joined_resistance_support
-
 from api.api_private import BybitTradeClientLinear
+from telegram import start_bot
 
 load_dotenv()
 
 
-IF_TEST = 1
-RISK_LIMIT = 0.8
-TP_RATE = 0.02
-SL_RATE = 0.01
-START_TRADE = False
-KLINE_PERIOD = 5  # to calculate sma
-VOLUME_MULTIPLICATOR = 10
-
-WINDOW = 30
-KLINE_INTERVAL = 1  # KLINES LENGTH
-KLINE_PERIOD = 5  # to calculate sma
-
-START_BUDGET = 0
-TRADING_PAIRS = []
-PAIRS_QUANTITY = 0
-USDT_BUDGET = 0
-
-MAIN_TEST = 'https://api-testnet.bybit.com'
-MAIN_REAL = 'https://api.bybit.com'
-
-
-
-
-async def get_variables():
-    tasks = [
-        asyncio.create_task(get_lin_perp_info_asc()),
-        # Add more tasks as needed
-    ]
-    results = await asyncio.gather(*tasks)
-    return results
-
-
-
-
 async def custom_on_message(ws, msg):
     db_futures = FutureKlinesOperations()
-    db_settings_vars = SettingsVarsOperations()
     try:
         data = json.loads(msg.data)
 
@@ -91,62 +56,73 @@ def run_socket_sync(topics, url):
     loop.run_until_complete(run_socket(topics, url))
 
 
-
 async def perform_strategy(trading_pairs):
 
     print('Strategy performance started')
+    db_futures = FutureKlinesOperations()
+    await db_futures.create_table()
 
-    load_dotenv()
+    db_get_vars = SettingsVarsOperations()
+    await db_get_vars.create_table()
 
+    # получаем настройки из базы, до получения необходимого минимума ждем
+    while True:
+        settings = {row.name: row.value for row in await db_get_vars.select_all()}
+        WINDOW = int(settings.get('window'))
+        KLINE_INTERVAL = settings.get('kline')  # KLINES LENGTH
+        KLINE_PERIOD = int(settings.get('sma_period'))  # to calculate sma
+        TP_RATE = float(settings.get('tp_rate'))
+        SL_RATE = float(settings.get('sl_rate'))
+        RISK_LIMIT = float(settings.get('risk_limit'))
+        VOLUME_MULTIPLICATOR = int(settings.get('multiplicator'))  # to defane SMA * N
 
+        if all(
+            var is not None
+            for var in [WINDOW, KLINE_INTERVAL, KLINE_PERIOD, TP_RATE, SL_RATE, RISK_LIMIT, VOLUME_MULTIPLICATOR]
+        ):
+            break
+        print("Ожидание инициализации всех переменных пользователем...")
+        await asyncio.sleep(1)  # Подождать 1 секунду перед повторной проверкой
+    print("Все переменные инициализированы", settings)
+
+    # MAIN_TEST = 'https://api-testnet.bybit.com'
+    # MAIN_REAL = 'https://api.bybit.com'
+
+    # отладочная настройка, меняется только вручную
     IF_TEST = True
-    global MAIN_TEST, MAIN_REAL
+    # IF_TEST = False
+
 
     if IF_TEST:
         print('THIS IS TEST ONLY')
-        MAIN_URL = MAIN_TEST
+        # MAIN_URL = MAIN_TEST
         API_KEY = str(os.getenv('test_bybit_api_key'))
         SECRET_KEY = str(os.getenv('test_bybit_secret_key'))
     else:
         print('BE CAREFUL REAL MARKET IN FORCE!!!')
         API_KEY = str(os.getenv('bybit_api_key'))
         SECRET_KEY = str(os.getenv('bybit_secret_key'))
-        MAIN_URL = MAIN_REAL
+        # MAIN_URL = MAIN_REAL
 
 
-    # BOT HERE OR IN MAIN
-    WINDOW = 30
-    KLINE_INTERVAL = 1 # KLINES LENGTH
-    KLINE_PERIOD = 5  # to calculate sma
-    TRADE_MODE = True
-    TP_RATE = 0.02
-    SL_RATE = 0.01
-    RISK_LIMIT = 0.8
-
-    VOLUME_MULTIPLICATOR = 10 # to defane SMA * N
-
-
-    # DB connectors, instances created
+    # DB connectors, trade class instance created
     client = BybitTradeClientLinear(API_KEY, SECRET_KEY,
                                     testnet=IF_TEST, risk_limit=RISK_LIMIT,
                                     tp_rate=TP_RATE, sl_rate=SL_RATE)
 
     await client.initialize_start_budget()
 
-    db_futures = FutureKlinesOperations()
-    #db_settings_vars = SettingsVarsOperations()
-
-    # VARIABLES
+    # получаем и сохраняем дневные уровни
     days_levels_created = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
 
-    # GETTING HISTORICAL KLINES
+    # получаем исторические свечии
+    print('Kline interval', KLINE_INTERVAL, 'kline period', KLINE_PERIOD)
     tasks = [
         asyncio.create_task(get_klines_asc(symbol, KLINE_INTERVAL, KLINE_PERIOD + 1)) for symbol in trading_pairs
     ]
     results = await asyncio.gather(*tasks)
     results = [element.get('result') for element in results if element.get('retMsg') == 'OK']
-    # print(results[0])
 
     def klines_to_df(klines, symbol):
         columns = ['start', 'open', 'high', 'low', 'close', 'volume', 'turnover']
@@ -164,7 +140,7 @@ async def perform_strategy(trading_pairs):
 
     if 'turnover' in klines_df.columns:
         klines_df = klines_df.drop('turnover', axis=1)
-    #print(klines_df.head())
+
 
     klines_df['start'] = pd.to_datetime(klines_df['start'], unit='ms')
     klines_df = klines_df.set_index(klines_df['start'])
@@ -172,7 +148,16 @@ async def perform_strategy(trading_pairs):
 
 
     # MAIN CTRATEGY CYCLE
+
     while True:
+
+        settings = {row.name: row.value for row in await db_get_vars.select_all()}
+        tm = int(settings.get('start_trade'))
+        if tm == 1:
+            TRADE_MODE = True
+        else:
+            TRADE_MODE = False
+
         now_utc = datetime.now(timezone.utc)
         start_of_today_utc = datetime(now_utc.year, now_utc.month, now_utc.day, tzinfo=timezone.utc)
 
@@ -181,11 +166,12 @@ async def perform_strategy(trading_pairs):
             days_levels = await joined_resistance_support(trading_pairs, WINDOW, debug=False)
             print('days_levels_created', now_utc)
 
+        # получаем из бд свежие свечи - получены из сокетов
         new_klines = await db_futures.select_and_delete_all_klines()
 
+        # если свечи получены - преобразуем их читаемый в датафрейм и присоединяем к уже имеющимся данным
         if not new_klines.empty:
             new_klines_df = pd.DataFrame(new_klines)
-            # print(new_klines_df.head())
 
             new_klines_df['start'] = pd.to_datetime(new_klines_df['start'], unit='ms')
             new_klines_df = new_klines_df.set_index(new_klines_df['start'])
@@ -194,25 +180,24 @@ async def perform_strategy(trading_pairs):
 
             klines_df = pd.concat([klines_df, new_klines_df])
             klines_df = klines_df.drop_duplicates()
-            # Сортируем данные по символу и старту в порядке убывания
-            #klines_df = klines_df.sort_values(by=['symbol', 'start'])
 
             # Рассчитываем SMA
             klines_df['SMA'] = klines_df.groupby('symbol')['volume'].transform(
                 lambda x: x.rolling(window=KLINE_PERIOD).mean())
 
-            # Сдвигаем SMA на одну строку вниз, чтобы текущее значение не учитывалось
+            # cдвигаем SMA на одну строку вниз, чтобы текущее значение не учитывалось
+            # обрезаем максимальное количество строк по каждому символу
             klines_df['SMA'] = klines_df.groupby('symbol')['SMA'].shift(1)
             klines_df = klines_df.groupby('symbol').apply(lambda group: group.iloc[-(KLINE_PERIOD * 2):]).reset_index(
                 drop=True)
 
-            # Проверяем сигналы -> превышение среднего объема -> пробитие уровня
-            grouped = klines_df.groupby('symbol')
 
+            grouped = klines_df.groupby('symbol')
             for symbol, group in grouped:
                 # Получаем последнюю строку в группе (самую свежую)
                 last_row = group.iloc[-1]
 
+                # Проверяем сигналы -> превышение среднего объема -> пробитие уровня
 
                 # Проверяем условие: volume > SMA * x
                 if not np.isnan(last_row['SMA']) and last_row['SMA'] != 0:
@@ -258,9 +243,9 @@ async def perform_strategy(trading_pairs):
 
             # FOR DEBUG
             klines_df.to_csv('klines_join_data.csv', index=False)
-            # print("Updated data loaded and saved to klines_join_data.csv")
+            print("Updated data loaded and saved to klines_join_data.csv")
 
-        await asyncio.sleep(1)  # Adjust sleep interval as needed
+        await asyncio.sleep(1)
 
 
 
@@ -270,35 +255,55 @@ def start_perform_strategy(trading_pairs):
     loop.run_until_complete(perform_strategy(trading_pairs))
 
 
+#async def start_bot_async():
+#    await start_bot()
+
+def start_bot_process():
+    asyncio.run(start_bot())
+
 
 async def main():
 
     try:
-        result = await get_variables()
-        trading_pairs = result[0][1]
 
+        # запускаем бота
+        bot_process = Process(target=start_bot_process)
+        bot_process.start()
+        db_get_vars = SettingsVarsOperations()
+        await db_get_vars.create_table()
 
-        db_futures = FutureKlinesOperations()
-        await db_futures.create_table()
+        # ждем установки через бота размер свечей
+        while True:
+            settings = {row.name: row.value for row in await db_get_vars.select_all()}
+            KLINE_INTERVAL = settings.get('kline')  # KLINES LENGTH
+            if KLINE_INTERVAL:
+                break
+
+            await asyncio.sleep(1)  # Подождать 1 секунду перед повторной проверкой
+
+        # собираем список торговых пар
+        find_pairs = await get_lin_perp_info_asc()
+        trading_pairs = find_pairs[1]
+
 
         # рыночные данные всегда собираем на реальном рынке, трейды в зависимости от настроек IF_TEST
         url_futures = 'wss://stream.bybit.com/v5/public/linear'
 
-
+        # собираем топики для сокетов
         topics = [f'kline.{KLINE_INTERVAL}.{pair}' for pair in trading_pairs]
         print(f"Total number of topics: {len(topics)}")
 
-        ws_amount = 4
+        ws_amount = 3
         topics_groups = split_list(topics, ws_amount)
 
-        # Start WebSockets
+        # запускаем сокеты
         processes = []
         for topic_group in topics_groups:
             p = Process(target=run_socket_sync, args=(topic_group, url_futures))
             processes.append(p)
             p.start()
 
-        # # Start strategy
+        # запускаем стратегию
         fetch_process = Process(target=start_perform_strategy, args=(trading_pairs,))
         fetch_process.start()
 
@@ -309,7 +314,6 @@ async def main():
 
     except Exception as e:
         print(f"An error occurred in main: {e}")
-
 
 if __name__ == '__main__':
     asyncio.run(main())
